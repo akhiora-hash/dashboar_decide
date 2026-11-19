@@ -1448,44 +1448,61 @@ document.querySelectorAll('.lang button').forEach(b=>b.addEventListener('click',
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>render());
 
 /* ---------- export PNG ---------- */
-function slug(s){ return String(s||'map').toLowerCase().replace(/[^a-z0-9\u0400-\u04ff]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,60) || 'map'; }
+function slug(s){ return String(s||'map').toLowerCase().replace(/[^a-z0-9Ѐ-ӿ]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,60) || 'map'; }
+function buildMapSVG(W){
+  const P = ll => L.CRS.EPSG3857.project(L.latLng(ll[1], ll[0]));
+  const sw=L.CRS.EPSG3857.project(home.getSouthWest()), ne=L.CRS.EPSG3857.project(home.getNorthEast());
+  const pad=W*0.02, k=(W-2*pad)/(ne.x-sw.x), H=Math.round((ne.y-sw.y)*k+2*pad);
+  const X = p => (pad+(p.x-sw.x)*k).toFixed(1), Y = p => (pad+(ne.y-p.y)*k).toFixed(1);
+  const lw = W/1100, panel = cssVar('--panel')||'#ffffff';
+  const fix = s => String(s==null?'':s).replace(/var\(--panel\)/g, panel);
+  const ringD = r => r.map((c,i)=>{ const p=P(c); return (i?'L':'M')+X(p)+' '+Y(p); }).join('')+'Z';
+  const geomD = g => !g ? '' : g.type==='Polygon' ? g.coordinates.map(ringD).join('') : g.type==='MultiPolygon' ? g.coordinates.map(pl=>pl.map(ringD).join('')).join('') : '';
+  const path = (e) => { const st=e.style||{}, d=geomD(e.f.geometry); if(!d) return '';
+    const fill = st.fill===false ? 'none' : fix(st.fillColor||'none'); const fo = st.fill===false ? 0 : (st.fillOpacity==null?1:st.fillOpacity);
+    const stroke = st.stroke===false ? 'none' : fix(st.color||'none');
+    return `<path d="${d}" fill="${fill}" fill-opacity="${fo}" fill-rule="evenodd" stroke="${stroke}" stroke-opacity="${st.opacity==null?1:st.opacity}" stroke-width="${((st.weight||0)*lw).toFixed(2)}"${st.dashArray?` stroke-dasharray="${String(st.dashArray).split(/\s+/).map(v=>v*lw).join(' ')}"`:''} stroke-linejoin="round"/>`; };
+  let out = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${fix(defs.innerHTML).replace(/patternTransform="rotate\(/g, `patternTransform="scale(${lw.toFixed(3)}) rotate(`)}</defs>`;
+  out += Object.values(byL3).map(path).join('') + Object.values(byL1).map(path).join('') + Object.values(byL2).map(path).join('');
+  lnLayer.eachLayer(l=>{ const pts=l.getLatLngs().map(ll=>P([ll.lng,ll.lat])); const o=l.options;
+    out += `<polyline points="${pts.map(p=>X(p)+','+Y(p)).join(' ')}" fill="none" stroke="${fix(o.color)}" stroke-width="${(o.weight*lw).toFixed(2)}" stroke-opacity="${o.opacity}" stroke-dasharray="${5*lw} ${4*lw}" stroke-linecap="round"/>`; });
+  pLayer.eachLayer(m=>{ const ll=m.getLatLng(), p=P([ll.lng,ll.lat]), ic=m.options.icon.options, sz=(ic.iconSize||[17,17])[0], s2=sz*lw;
+    out += `<g transform="translate(${(X(p)-s2/2).toFixed(1)},${(Y(p)-s2/2).toFixed(1)}) scale(${lw.toFixed(3)})">${fix(ic.html)}</g>`; });
+  if(labelsOn()){
+    const col = cssVar('--label')||'#3A4E6B', bg = cssVar('--map-bg')||'#F4F7FB';
+    G1.features.forEach(f=>{ const pr=f.properties; if(!pr.la || /^UA85/.test(pr.c)) return;
+      const n = /Республіка/.test(pr.n) ? (state.lang==='en'?'Crimea':'АР Крим') : (state.lang==='en'?translit(pr.n):pr.n); const p=P([pr.lo,pr.la]);
+      out += `<text x="${X(p)}" y="${(+Y(p)+14*lw).toFixed(1)}" text-anchor="middle" font-family="Onest, Arial, sans-serif" font-weight="600" font-size="${(11*lw).toFixed(1)}" fill="${col}" stroke="${bg}" stroke-width="${(3*lw).toFixed(1)}" paint-order="stroke" stroke-linejoin="round">${esc(n)}</text>`; });
+  }
+  out += `<text x="${W-pad/2}" y="${H-pad/3}" text-anchor="end" font-family="Onest, Arial, sans-serif" font-size="${(10*lw).toFixed(1)}" fill="#7A86A3">${esc(tx('attribution'))}</text></svg>`;
+  return {svg:out, W, H};
+}
+function svgToCanvas(svg, W, H, bg){
+  return new Promise((res,rej)=>{ const img=new Image();
+    img.onload=()=>{ const c=document.createElement('canvas'); c.width=W; c.height=H; const g=c.getContext('2d'); if(bg){ g.fillStyle=bg; g.fillRect(0,0,W,H); } g.drawImage(img,0,0,W,H); URL.revokeObjectURL(img.src); res(c); };
+    img.onerror=rej; img.src=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml;charset=utf-8'})); });
+}
 async function exportPNG(mode){
   const btn=document.getElementById('exportbtn'), root=document.documentElement;
-  const node = mode==='legend' ? document.querySelector('.main') : document.getElementById('map');
-  const mapEl=document.getElementById('map');
-  const defs=document.getElementById('defs').cloneNode(true); defs.removeAttribute('id'); mapEl.appendChild(defs);
-  map.closePopup(); map.eachLayer(l=>{ if(l.closeTooltip) l.closeTooltip(); });
-  root.classList.add('exporting'); if(mode==='transparent') root.classList.add('transparent');
   btn.disabled=true; btn.querySelector('.tx').textContent=tx('export_busy');
-  const view={c:map.getCenter(), z:map.getZoom()};
-  const stage=document.querySelector('.stage'), main=document.querySelector('.main');
-  const prev={sh:stage.style.height, mh:main.style.height, ma:main.style.alignSelf, mr:main.style.gridTemplateRows, zs:map.options.zoomSnap};
-  const hb=home.getNorthEast(), lb=home.getSouthWest();
-  const aspect = (hb.lat-lb.lat) / ((hb.lng-lb.lng)*Math.cos((hb.lat+lb.lat)/2*Math.PI/180));
-  stage.style.height = Math.round(stage.offsetWidth*aspect*1.08 + 40)+'px';
-  main.style.gridTemplateRows='auto auto'; main.style.height='auto'; main.style.alignSelf='start';
-  map.options.zoomSnap = 0;
-  map.invalidateSize({animate:false});
-  map.fitBounds(home, {padding:[20,20], animate:false}); renderLabels();
-  await new Promise(r=>setTimeout(r,450));
-  const filter = n => !(n.classList && (n.classList.contains('mapbar') || n.classList.contains('leaflet-control-zoom') || n.id==='table'));
-  const ratio = Math.min(4, Math.max(2, 4000 / node.offsetWidth));
-  const opts = { pixelRatio: ratio, filter, cacheBust:false,
-    backgroundColor: mode==='transparent' ? undefined : getComputedStyle(document.body).backgroundColor };
   try{
-    let url;
-    try{ url = await htmlToImage.toPng(node, opts); }
-    catch(e){ console.warn('retry without fonts', e); url = await htmlToImage.toPng(node, {...opts, skipFonts:true}); }
+    const W=4000, {svg,H} = buildMapSVG(W);
+    const mapBg = mode==='transparent' ? null : (cssVar('--map-bg')||'#F4F7FB');
+    let canvas = await svgToCanvas(svg, W, H, mapBg);
+    if(mode==='legend'){
+      const leg=document.getElementById('legend'); root.classList.add('exporting');
+      const opts={pixelRatio: W/leg.offsetWidth, backgroundColor: getComputedStyle(leg).backgroundColor || '#ffffff'};
+      let lc; try{ lc = await htmlToImage.toCanvas(leg, opts); } catch(e){ lc = await htmlToImage.toCanvas(leg, {...opts, skipFonts:true}); }
+      root.classList.remove('exporting');
+      const c=document.createElement('canvas'); c.width=W; c.height=H+lc.height; const g=c.getContext('2d');
+      g.drawImage(canvas,0,0); g.fillStyle=cssVar('--line')||'#DAE1E8'; g.fillRect(0,H,W,Math.max(2,W/1000)); g.drawImage(lc,0,H,W,lc.height*W/lc.width); canvas=c;
+    }
+    const url = canvas.toDataURL('image/png');
     const a=document.createElement('a'); const act=DB.activities.find(x=>x['id']===state.act);
     a.href=url; a.download=`decide-${slug(act ? act['id'] : 'map')}-${mode}-${state.lang}.png`;
     document.body.appendChild(a); a.click(); a.remove();
   }catch(e){ console.error(e); alert(tx('export_error')); }
-  finally{
-    defs.remove(); root.classList.remove('exporting','transparent');
-    stage.style.height=prev.sh; main.style.height=prev.mh; main.style.alignSelf=prev.ma; main.style.gridTemplateRows=prev.mr; map.options.zoomSnap=prev.zs;
-    map.invalidateSize({animate:false}); map.setView(view.c, view.z, {animate:false}); renderLabels();
-    btn.disabled=false; btn.querySelector('.tx').textContent=tx('export_btn');
-  }
+  finally{ root.classList.remove('exporting'); btn.disabled=false; btn.querySelector('.tx').textContent=tx('export_btn'); }
 }
 (function(){
   const btn=document.getElementById('exportbtn'), menu=document.getElementById('exportmenu');
