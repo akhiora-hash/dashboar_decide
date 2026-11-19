@@ -1138,6 +1138,7 @@ function renderLabels(){
     L.marker([p.la,p.lo], {pane:'lbl', interactive:false, keyboard:false, icon:L.divIcon({className:'', html:`<span class="olabel">${esc(n)}</span>`, iconSize:[0,0]})}).addTo(lblLayer); });
 }
 map.on('zoomend', ()=>renderLabels());
+try{ let rt; new ResizeObserver(()=>{ clearTimeout(rt); rt=setTimeout(()=>{ if(document.documentElement.classList.contains('exporting')) return; const fit = map.getZoom() <= map.getBoundsZoom(home)+0.01; map.invalidateSize({animate:false}); if(fit) map.fitBounds(home,{padding:[12,12],animate:false}); }, 120); }).observe(document.getElementById('map')); }catch(e){}
 map.on('popupopen', ()=>document.querySelector('.mapbar').classList.add('dim'));
 map.on('popupclose', ()=>document.querySelector('.mapbar').classList.remove('dim'));
 const pLayer = L.layerGroup().addTo(map);
@@ -1457,8 +1458,16 @@ async function exportPNG(mode){
   root.classList.add('exporting'); if(mode==='transparent') root.classList.add('transparent');
   btn.disabled=true; btn.querySelector('.tx').textContent=tx('export_busy');
   const view={c:map.getCenter(), z:map.getZoom()};
-  map.fitBounds(home, {padding:[16,16], animate:false}); renderLabels();
-  await new Promise(r=>setTimeout(r,350));
+  const stage=document.querySelector('.stage'), main=document.querySelector('.main');
+  const prev={sh:stage.style.height, mh:main.style.height, ma:main.style.alignSelf, mr:main.style.gridTemplateRows, zs:map.options.zoomSnap};
+  const hb=home.getNorthEast(), lb=home.getSouthWest();
+  const aspect = (hb.lat-lb.lat) / ((hb.lng-lb.lng)*Math.cos((hb.lat+lb.lat)/2*Math.PI/180));
+  stage.style.height = Math.round(stage.offsetWidth*aspect*1.08 + 40)+'px';
+  main.style.gridTemplateRows='auto auto'; main.style.height='auto'; main.style.alignSelf='start';
+  map.options.zoomSnap = 0;
+  map.invalidateSize({animate:false});
+  map.fitBounds(home, {padding:[20,20], animate:false}); renderLabels();
+  await new Promise(r=>setTimeout(r,450));
   const filter = n => !(n.classList && (n.classList.contains('mapbar') || n.classList.contains('leaflet-control-zoom') || n.id==='table'));
   const ratio = Math.min(4, Math.max(2, 4000 / node.offsetWidth));
   const opts = { pixelRatio: ratio, filter, cacheBust:false,
@@ -1473,7 +1482,8 @@ async function exportPNG(mode){
   }catch(e){ console.error(e); alert(tx('export_error')); }
   finally{
     defs.remove(); root.classList.remove('exporting','transparent');
-    map.setView(view.c, view.z, {animate:false}); renderLabels();
+    stage.style.height=prev.sh; main.style.height=prev.mh; main.style.alignSelf=prev.ma; main.style.gridTemplateRows=prev.mr; map.options.zoomSnap=prev.zs;
+    map.invalidateSize({animate:false}); map.setView(view.c, view.z, {animate:false}); renderLabels();
     btn.disabled=false; btn.querySelector('.tx').textContent=tx('export_btn');
   }
 }
