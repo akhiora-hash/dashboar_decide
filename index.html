@@ -734,7 +734,16 @@ h1{font-size:23px;line-height:1.15;margin:0;font-weight:700;letter-spacing:-.015
 .main{display:grid;grid-template-rows:1fr auto;min-height:0;min-width:0}
 #map{height:100%;width:100%;background:var(--map-bg)}
 .legend{background:var(--panel);border-top:1px solid var(--line);padding:16px 22px 18px;display:grid;grid-template-columns:minmax(220px,340px) 1fr;gap:10px 32px;align-items:start}
-.legend h2{margin:0;font-size:18px;font-weight:700;letter-spacing:-.01em}
+.legend h2{margin:0;font-size:18px;font-weight:700;letter-spacing:-.01em;padding-right:120px}
+.legend{position:relative}
+.legtoggle{position:absolute;top:12px;right:16px;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:5px 12px 5px 9px;font:inherit;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer}
+.legtoggle:hover{color:var(--ink);border-color:var(--muted)}
+.legtoggle svg{transition:transform .2s}
+.legend.collapsed .legtoggle svg{transform:rotate(180deg)}
+.legend.collapsed{padding-top:12px;padding-bottom:12px;grid-template-columns:1fr}
+.legend.collapsed .desc,.legend.collapsed .chips,.legend.collapsed .hint{display:none}
+.exporting .legtoggle{display:none!important}
+@media (prefers-reduced-motion: reduce){.legtoggle svg{transition:none}}
 .legend .desc{margin:4px 0 0;color:var(--muted);font-size:13.5px;max-width:60ch}
 .legend .desc details{margin-top:2px}
 .legend .desc summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:13px;width:max-content}
@@ -957,6 +966,8 @@ const DEF_TEXT = {
   no_results:['Нічого не знайдено. Змініть запит або увімкніть категорії в легенді.','Nothing found. Change the search or turn categories back on in the legend.'],
   show_on_map:['Показати на карті','Show on map'],
   more:['Детальніше','More'],
+  legend_hide:['Згорнути легенду','Hide legend'],
+  legend_show:['Розгорнути легенду','Show legend'],
   labels_toggle:['Назви областей','Oblast names'],
   export_btn:['Завантажити','Download'],
   export_legend:['Карта з легендою (PNG)','Map with legend (PNG)'],
@@ -974,7 +985,7 @@ const DEF_THEME = {
 };
 const THEME_VARS = { map_bg:['--map-bg'], land:['--land'], land_border:['--land-stroke'], oblast_border:['--oblast-stroke'], accent:['--accent','--focus'] };
 
-const state = { labels: null, view: 'map', q: '', sort: null, lang: 'ua', act: null, hidden: new Set(), source: 'demo', updatedAt: null, missing: 0 };
+const state = { legendCollapsed: false, labels: null, view: 'map', q: '', sort: null, lang: 'ua', act: null, hidden: new Set(), source: 'demo', updatedAt: null, missing: 0 };
 let DB = { activities: [], legend: [], data: [], statCols: [], texts: {}, theme: {} };
 
 /* ---------- helpers ---------- */
@@ -1341,7 +1352,9 @@ function renderUI(){
     const n = sm.perCat[l.cat] ? sm.perCat[l.cat].size : 0;
     return `<button type="button" class="chip" data-cat="${esc(l.cat)}" aria-pressed="${!state.hidden.has(l.cat)}">${swatch(l)}<span class="lbl">${esc(L_(l,'ua','en'))}</span><span class="n">${fmt(n)}</span></button>`;
   }).join('');
-  document.getElementById('legend').innerHTML = a ? `<div><h2>${esc(L_(a,'назва ua','назва en'))}</h2><div class="desc">${richText(L_(a,'опис ua','опис en'))}</div></div>
+  const legEl=document.getElementById('legend'); legEl.classList.toggle('collapsed', !!state.legendCollapsed);
+  const legBtn = a ? `<button type="button" class="legtoggle" aria-expanded="${!state.legendCollapsed}" aria-controls="legend"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>${esc(tx(state.legendCollapsed?'legend_show':'legend_hide'))}</button>` : '';
+  document.getElementById('legend').innerHTML = a ? legBtn+`<div><h2>${esc(L_(a,'назва ua','назва en'))}</h2><div class="desc">${richText(L_(a,'опис ua','опис en'))}</div></div>
     <div class="chips">${chips || `<span class="empty">${esc(tx('empty'))}</span>`}</div>${chips?`<p class="hint">${esc(tx('hint'))}</p>`:''}` : '';
 
   // status
@@ -1441,6 +1454,7 @@ document.getElementById('acts').addEventListener('click', ev=>{
   render();
 });
 document.getElementById('legend').addEventListener('click', ev=>{
+  if(ev.target.closest('.legtoggle')){ state.legendCollapsed=!state.legendCollapsed; try{localStorage.setItem('decide-map-legend', state.legendCollapsed?'0':'1');}catch(e){} renderUI(); return; }
   const b=ev.target.closest('.chip'); if(!b) return;
   const c=b.dataset.cat; state.hidden.has(c) ? state.hidden.delete(c) : state.hidden.add(c); render();
 });
@@ -1490,10 +1504,10 @@ async function exportPNG(mode){
     const mapBg = mode==='transparent' ? null : (cssVar('--map-bg')||'#F4F7FB');
     let canvas = await svgToCanvas(svg, W, H, mapBg);
     if(mode==='legend'){
-      const leg=document.getElementById('legend'); root.classList.add('exporting');
+      const leg=document.getElementById('legend'); const wasCol=leg.classList.contains('collapsed'); leg.classList.remove('collapsed'); root.classList.add('exporting');
       const opts={pixelRatio: W/leg.offsetWidth, backgroundColor: getComputedStyle(leg).backgroundColor || '#ffffff'};
       let lc; try{ lc = await htmlToImage.toCanvas(leg, opts); } catch(e){ lc = await htmlToImage.toCanvas(leg, {...opts, skipFonts:true}); }
-      root.classList.remove('exporting');
+      root.classList.remove('exporting'); if(wasCol) leg.classList.add('collapsed');
       const c=document.createElement('canvas'); c.width=W; c.height=H+lc.height; const g=c.getContext('2d');
       g.drawImage(canvas,0,0); g.fillStyle=cssVar('--line')||'#DAE1E8'; g.fillRect(0,H,W,Math.max(2,W/1000)); g.drawImage(lc,0,H,W,lc.height*W/lc.width); canvas=c;
     }
@@ -1514,7 +1528,7 @@ async function exportPNG(mode){
 })();
 
 (async function init(){
-  try{ const s=localStorage.getItem('decide-map-lang'); if(s==='ua'||s==='en') state.lang=s; const lb=localStorage.getItem('decide-map-labels'); if(lb==='1'||lb==='0') state.labels = lb==='1'; }catch(e){}
+  try{ const s=localStorage.getItem('decide-map-lang'); if(s==='ua'||s==='en') state.lang=s; const lg=localStorage.getItem('decide-map-legend'); if(lg==='0') state.legendCollapsed=true; const lb=localStorage.getItem('decide-map-labels'); if(lb==='1'||lb==='0') state.labels = lb==='1'; }catch(e){}
   document.getElementById('lbltoggle').addEventListener('click', ()=>{ state.labels = !labelsOn(); try{localStorage.setItem('decide-map-labels', state.labels?'1':'0');}catch(e){} renderLabels(); renderUI(); });
   await load();
   const h = decodeURIComponent(location.hash.slice(1));
